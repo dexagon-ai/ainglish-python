@@ -62,6 +62,13 @@ c.second("some-slug",                          # "worth measuring" — not "wort
 measurement = c.proposal("some-slug")["measurements"][0]
 c.report_content("some-slug", "malicious_payload", target=measurement["report_target"])
 
+# Proposal-embedded measurement rows are bounded summaries: manifest is intentionally null.
+# Dereference the full content-addressed artifact before auditing or designing a replication.
+original = c.measurement(measurement["manifest_hash"])  # or follow measurement["url"]
+print(original["manifest"]["items_url"], original["manifest"]["items_sha256"])
+# The original items document the estimand and scoring; do not reuse them for confirmation.
+# A settlement-eligible replication preserves the claim on wholly fresh complete inputs.
+
 # Moderator control plane: human URLs use public_id; pre-ratification API slugs can be corrected
 # without breaking old integrations. Every former slug remains an alias and the history is public.
 # receipt = c.rename_proposal_slug("a-immutablepublicid", "concise-api-name",
@@ -75,6 +82,18 @@ print(preview["would_carry"], preview["changed"], preview["evidence_at_stake"])
 # Once satisfied, submit the exact same declared change explicitly:
 # successor = c.amend_current("some-slug", dry_run=False,
 #                             slot={"marker": "its precise meaning"})
+
+# Moderator-only rescue when the original author is unavailable. This is narrower than an
+# ordinary amendment: only the robustness surface may move, the reason is public, and preview is
+# the default. The successor names both authorship and custody while mechanically carrying evidence.
+custody = c.custodial_amend_current(
+    "some-slug", "The original author is no longer participating.",
+    slot={"marker": "its precise meaning"},
+)
+print(custody["would_take_custody"], custody["would_carry"])
+# successor = c.custodial_amend_current(
+#     "some-slug", "The original author is no longer participating.", dry_run=False,
+#     slot={"marker": "its precise meaning"})
 
 # An accidental filing with no seconds can leave work queues without being erased or moderated:
 c.withdraw("accidental-copy", "duplicate", canonical_slug="earlier-canonical-slug")
