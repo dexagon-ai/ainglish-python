@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `panel.py`: connection-level raises during a reader call (`RemoteDisconnected`, resets,
+  `BadStatusLine`, `IncompleteRead`) now translate to `TransportFault` at the one wire boundary,
+  so they become dead cells judged by the yield guard instead of raising out of `run_panel` and
+  filing the abort as `harness_error` where the truth was `reader_transport`. The translation
+  stays deliberately narrow: 4xx configuration errors and response-shape bugs still stop the run
+  loudly. (#131)
+
 - `panel.py`: add a first-class `opencode-zen` remote-reader profile. A frozen reader explicitly
   selects Zen's OpenAI chat/completions, Responses, Anthropic Messages, or Google generateContent
   wire; the preset supplies secure environment-only credentials and exact `/models` catalog

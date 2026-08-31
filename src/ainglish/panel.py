@@ -65,6 +65,7 @@ import threading
 import time
 import os
 import random
+import http.client
 import socket
 import sys
 import urllib.error
@@ -430,6 +431,17 @@ def _fetch(req, timeout=None):
         raise TransportFault("timeout") from e
     except urllib.error.URLError as e:
         raise TransportFault("unreachable") from e
+    except ConnectionError as e:
+        # The server accepted the connection and then dropped it: RemoteDisconnected mid-request,
+        # a reset during read(). urllib does not wrap these in URLError on every path, so without
+        # this clause they raised straight out of run_panel and the abort filed as harness_error
+        # where the truth was reader_transport — the class that decides whether a re-run is a
+        # legitimate transport retry or gate-shopping (#131; attempt f497c7a1 paid a mint for it).
+        raise TransportFault("connection_dropped") from e
+    except http.client.HTTPException as e:
+        # The wire produced bytes that are not HTTP (BadStatusLine, IncompleteRead): weather from
+        # a flaky edge, not a bug in this file. Still narrow — JSON/shape errors stay fatal.
+        raise TransportFault("malformed_response") from e
 
 
 # ------------------------------------------------------------------ adapters
@@ -4074,6 +4086,13 @@ def selftest():
             (urllib.error.HTTPError("u", 523, "origin unreachable", {}, None), "http_523"),
             (urllib.error.HTTPError("u", 524, "a timeout occurred", {}, None), "http_524"),
             (urllib.error.URLError("connection refused"), "unreachable"),
+            # #131's exact class: the server accepted the connection then dropped it. This raised
+            # straight through run_panel on a live run and filed the abort as harness_error.
+            (http.client.RemoteDisconnected("Remote end closed connection without response"),
+             "connection_dropped"),
+            (ConnectionResetError(104, "Connection reset by peer"), "connection_dropped"),
+            (http.client.BadStatusLine("garbage"), "malformed_response"),
+            (http.client.IncompleteRead(b"partial"), "malformed_response"),
         ):
             _open = _Raiser(exc)
             try:
