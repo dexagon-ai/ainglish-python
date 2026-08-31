@@ -438,7 +438,7 @@ def _fetch(req, timeout=None):
         # where the truth was reader_transport — the class that decides whether a re-run is a
         # legitimate transport retry or gate-shopping (#131; attempt f497c7a1 paid a mint for it).
         raise TransportFault("connection_dropped") from e
-    except http.client.HTTPException as e:
+    except (http.client.BadStatusLine, http.client.IncompleteRead) as e:
         # The wire produced bytes that are not HTTP (BadStatusLine, IncompleteRead): weather from
         # a flaky edge, not a bug in this file. Still narrow — JSON/shape errors stay fatal.
         raise TransportFault("malformed_response") from e
@@ -4104,7 +4104,10 @@ def selftest():
         for exc in (urllib.error.HTTPError("u", 400, "bad request", {}, None),
                     urllib.error.HTTPError("u", 401, "unauthorized", {}, None),
                     urllib.error.HTTPError("u", 404, "no such model", {}, None),
-                    ValueError("response shape changed")):
+                    ValueError("response shape changed"),
+                    http.client.InvalidURL("malformed endpoint"),
+                    http.client.CannotSendRequest("client request state"),
+                    http.client.ResponseNotReady("client response state")):
             _open = _Raiser(exc)
             try:
                 _fetch(urllib.request.Request("http://x", b"{}"))
@@ -4113,7 +4116,8 @@ def selftest():
                 raise AssertionError(
                     f"{exc!r} was swallowed as a transport fault — a bug or a misconfiguration "
                     f"must stop the run, not become a quiet dead cell")
-            except (urllib.error.HTTPError, ValueError):
+            except (urllib.error.HTTPError, ValueError, http.client.InvalidURL,
+                    http.client.CannotSendRequest, http.client.ResponseNotReady):
                 pass
     finally:
         _open = real_open
@@ -5022,6 +5026,17 @@ def selftest():
         "the refusal must state what was bought before it gave up"
     assert _panel_refusal_failed_gate_kind(dead) != "harness_error", \
         "a typed refusal must not be filed as a harness fault: that is the distinction the crash erased"
+
+    def always_transport_fault(reason):
+        def reader(ep, text, q, options):
+            raise TransportFault(reason)
+        return reader
+
+    for reason in ("connection_dropped", "malformed_response"):
+        transport_refusal = run_panel(good, ask_fn=always_transport_fault(reason))
+        assert _is_panel_refusal(transport_refusal), reason
+        assert _panel_refusal_failed_gate_kind(transport_refusal) == "reader_transport", \
+            f"terminal {reason} refusal must file as reader_transport, never a yield-only failure"
 
     # …and it must fail BEFORE buying a single real item. The gate used to be scored last, so a
     # blind panel paid for the whole run before saying it was blind. Asserting "returns None" does
@@ -6207,13 +6222,14 @@ def _panel_refusal_failed_gate_kind(refusal):
         return "harness_refuse"
 
     faults = (refusal.get("details") or {}).get("transport_faults") or {}
+    transport_reasons = {"timeout", "unreachable", "connection_dropped", "malformed_response"}
     reasons = set()
 
     def collect(value):
         if isinstance(value, dict):
             for key, child in value.items():
                 if isinstance(child, int) and not isinstance(child, bool) and child > 0 \
-                        and (key == "timeout" or key == "unreachable" or key.startswith("http_")):
+                        and (key in transport_reasons or key.startswith("http_")):
                     reasons.add(key)
                 else:
                     collect(child)
